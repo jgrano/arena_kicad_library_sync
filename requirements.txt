@@ -1,0 +1,4 @@
+requests>=2.31.0
+keyring>=25.0.0
+platformdirs>=4.0.0
+kiutils>=1.4.0
