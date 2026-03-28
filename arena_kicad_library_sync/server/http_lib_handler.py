@@ -10,6 +10,8 @@ Endpoints:
   GET /v1/parts/{category_id}/{part_id}
 """
 
+from __future__ import annotations
+
 import logging
 from typing import Any
 

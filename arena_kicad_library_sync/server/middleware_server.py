@@ -11,6 +11,8 @@ Provides:
 - Health check and Prometheus metrics
 """
 
+from __future__ import annotations
+
 import logging
 import os
 from contextlib import asynccontextmanager

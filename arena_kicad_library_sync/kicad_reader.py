@@ -5,6 +5,8 @@ Works without launching KiCad or importing pcbnew/eeschema APIs.
 Extracts component data for bidirectional sync with Arena PLM.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 from dataclasses import dataclass, field

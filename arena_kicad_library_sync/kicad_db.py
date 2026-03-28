@@ -9,6 +9,8 @@ Schema supports bidirectional sync with Arena PLM including
 dirty tracking, conflict detection, and audit logging.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os

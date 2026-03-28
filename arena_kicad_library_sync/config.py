@@ -8,6 +8,8 @@ Handles:
 - Configurable field mappings between Arena and KiCad
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os

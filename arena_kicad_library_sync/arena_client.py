@@ -15,6 +15,8 @@ Safety rules enforced in code:
 - Every write logged at INFO with before/after values
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import ssl
