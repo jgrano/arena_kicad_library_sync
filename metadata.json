@@ -1,0 +1,41 @@
+{
+  "name": "Arena PLM Library Sync",
+  "description": "Bidirectional KiCad library sync with Arena PLM. Supports HTTP lib, DB lib, and server middleware deployment.",
+  "description_full": "A KiCad action plugin that enables bidirectional component library synchronization between KiCad and Arena PLM (PTC Arena Solutions). Pull components from Arena into KiCad database or HTTP libraries, push local changes back, and resolve conflicts with a visual diff UI. Supports local plugin mode, server middleware deployment via Docker, or both simultaneously.",
+  "identifier": "com.emporiaenergy.arena-kicad-library-sync",
+  "type": "plugin",
+  "author": {
+    "name": "Emporia Energy",
+    "contact": {
+      "web": "https://emporiaenergy.com"
+    }
+  },
+  "maintainer": {
+    "name": "Emporia Energy",
+    "contact": {
+      "web": "https://github.com/jgrano/arena_kicad_library_sync"
+    }
+  },
+  "license": "MIT",
+  "resources": {
+    "homepage": "https://github.com/jgrano/arena_kicad_library_sync"
+  },
+  "versions": [
+    {
+      "version": "1.0.0",
+      "status": "stable",
+      "kicad_version": "8.0",
+      "download_url": "",
+      "download_sha256": "",
+      "download_size": 0,
+      "install_size": 0,
+      "platforms": ["linux", "macos", "windows"],
+      "runtime_deps": [
+        "requests",
+        "keyring",
+        "platformdirs",
+        "kiutils"
+      ]
+    }
+  ]
+}

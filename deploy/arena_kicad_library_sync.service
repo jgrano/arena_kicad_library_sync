@@ -1,0 +1,16 @@
+[Unit]
+Description=Arena KiCad Library Sync Server
+After=network.target
+
+[Service]
+Type=simple
+User=arena-sync
+Group=arena-sync
+WorkingDirectory=/opt/arena-kicad-library-sync
+ExecStart=/usr/bin/uvicorn arena_kicad_library_sync.server.middleware_server:app --host 0.0.0.0 --port 8765
+EnvironmentFile=/opt/arena-kicad-library-sync/.env
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

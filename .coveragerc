@@ -1,0 +1,14 @@
+[run]
+source = arena_kicad_library_sync
+omit =
+    arena_kicad_library_sync/ui/*
+    arena_kicad_library_sync/arena_kicad_library_sync.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__
+    if wx is None
+    except ImportError
+    raise ImportError
+    pass
