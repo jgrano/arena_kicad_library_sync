@@ -1,10 +1,10 @@
 """
 Main sync dialog for Arena KiCad Library Sync.
 
-Two-panel layout:
-- Left: Status panel (connection, last sync times, counts)
-- Right: Tabbed sync controls (Pull / Push / Bidirectional)
-- Bottom: Progress bar, scrollable log, action buttons
+Layout matches the original KiCad Arena Sync plugin UX:
+- Top: Inline Arena connection panel with saved creds + workspace dropdown
+- Middle: Sync controls (Pull / Push / Bidirectional)
+- Bottom: Progress bar, log, action buttons
 """
 
 import logging
@@ -23,56 +23,312 @@ def _require_wx():
         raise ImportError("wxPython is required for UI dialogs")
 
 
-class SyncDialog(wx.Dialog if wx else object):
-    """Main sync dialog for Arena PLM Library Sync."""
+# ---------------------------------------------------------------------------
+# Arena Connection Panel (inline at top of dialog)
+# ---------------------------------------------------------------------------
+
+class ArenaLoginPanel(wx.Panel):
+    """Inline login panel with saved credentials and workspace dropdown.
+
+    If credentials are saved: shows "Saved account: email" + workspace
+    dropdown + "Connect to Arena" / "Change account" buttons.
+
+    If no saved credentials: shows email/password fields + workspace
+    dropdown + "Connect to Arena" button + save checkbox.
+    """
+
+    def __init__(self, parent, config, on_connected):
+        super().__init__(parent)
+        self.config = config
+        self._on_connected = on_connected
+        self.client = None
+        self.arena_api = None
+
+        sizer = wx.StaticBoxSizer(wx.VERTICAL, self, "Arena Connection")
+        inner = sizer.GetStaticBox()
+
+        # Check for saved credentials
+        email = config.arena_email if config else ""
+        password = config.get_arena_password() if config else None
+
+        if email and password:
+            self._build_quick_connect(sizer, inner, email, password)
+        else:
+            self._build_full_login(sizer, inner)
+
+        self.SetSizer(sizer)
+
+    def _build_quick_connect(self, sizer, parent, email, password):
+        """One-click connect for saved credentials with workspace toggle."""
+        self._saved_email = email
+        self._saved_password = password
+
+        label = wx.StaticText(parent, label=f"Saved account: {email}")
+        sizer.Add(label, 0, wx.ALL, 5)
+
+        # Workspace toggle
+        ws_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        ws_sizer.Add(wx.StaticText(parent, label="Workspace:"), 0,
+                      wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        self.quick_workspace = wx.Choice(parent, choices=["Production", "Sandbox"])
+        # Select saved workspace
+        saved_ws = self.config.arena_workspace_id if self.config else ""
+        from ..arena_client import ArenaClient
+        sel = 1 if saved_ws == str(ArenaClient.WORKSPACES.get("Sandbox", "")) else 0
+        self.quick_workspace.SetSelection(sel)
+        ws_sizer.Add(self.quick_workspace, 0, wx.RIGHT, 10)
+        sizer.Add(ws_sizer, 0, wx.LEFT | wx.RIGHT | wx.TOP, 5)
+
+        # Buttons
+        btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.connect_btn = wx.Button(parent, label="Connect to Arena")
+        self.connect_btn.Bind(wx.EVT_BUTTON, self._on_quick_connect)
+        btn_sizer.Add(self.connect_btn, 0, wx.RIGHT, 5)
+
+        change_btn = wx.Button(parent, label="Change account")
+        change_btn.Bind(wx.EVT_BUTTON, self._on_change_account)
+        btn_sizer.Add(change_btn, 0)
+
+        sizer.Add(btn_sizer, 0, wx.ALL, 5)
+
+        self.status_label = wx.StaticText(parent, label="")
+        sizer.Add(self.status_label, 0, wx.ALL, 5)
+
+    def _build_full_login(self, sizer, parent):
+        """Email/password fields with workspace selector."""
+        self._saved_email = None
+        self._saved_password = None
+
+        grid = wx.FlexGridSizer(4, 2, 5, 5)
+        grid.AddGrowableCol(1, 1)
+
+        grid.Add(wx.StaticText(parent, label="Email:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.email_input = wx.TextCtrl(parent, size=(250, -1))
+        grid.Add(self.email_input, 1, wx.EXPAND)
+
+        grid.Add(wx.StaticText(parent, label="Password:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.password_input = wx.TextCtrl(parent, style=wx.TE_PASSWORD, size=(250, -1))
+        grid.Add(self.password_input, 1, wx.EXPAND)
+
+        grid.Add(wx.StaticText(parent, label="Workspace:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.workspace_choice = wx.Choice(parent, choices=["Production", "Sandbox"])
+        self.workspace_choice.SetSelection(0)
+        grid.Add(self.workspace_choice, 1, wx.EXPAND)
+
+        grid.Add(wx.StaticText(parent, label=""), 0)
+        self.save_creds_chk = wx.CheckBox(parent, label="Save login credentials")
+        self.save_creds_chk.SetValue(True)
+        grid.Add(self.save_creds_chk, 0)
+
+        sizer.Add(grid, 0, wx.EXPAND | wx.ALL, 5)
+
+        self.connect_btn = wx.Button(parent, label="Connect to Arena")
+        self.connect_btn.Bind(wx.EVT_BUTTON, self._on_login)
+        sizer.Add(self.connect_btn, 0, wx.ALL, 5)
+
+        self.status_label = wx.StaticText(parent, label="")
+        sizer.Add(self.status_label, 0, wx.ALL, 5)
+
+    def _on_quick_connect(self, event):
+        """Connect using saved credentials with selected workspace."""
+        self.connect_btn.Disable()
+        self.status_label.SetLabel("Connecting...")
+        self.status_label.SetForegroundColour(wx.BLACK)
+
+        from ..arena_client import ArenaClient
+        workspace_label = self.quick_workspace.GetStringSelection()
+        workspace_id = str(ArenaClient.WORKSPACES.get(workspace_label, ""))
+
+        self._do_login(
+            self._saved_email, self._saved_password,
+            workspace_id=workspace_id,
+            workspace_label=workspace_label,
+            save=True,
+        )
+
+    def _on_login(self, event):
+        """Connect using entered credentials."""
+        email = self.email_input.GetValue().strip()
+        password = self.password_input.GetValue().strip()
+        if not email or not password:
+            self.status_label.SetLabel("Email and password are required.")
+            self.status_label.SetForegroundColour(wx.RED)
+            return
+
+        self.connect_btn.Disable()
+        self.status_label.SetLabel("Connecting...")
+        self.status_label.SetForegroundColour(wx.BLACK)
+
+        from ..arena_client import ArenaClient
+        workspace_label = self.workspace_choice.GetStringSelection()
+        workspace_id = str(ArenaClient.WORKSPACES.get(workspace_label, ""))
+        save = self.save_creds_chk.GetValue()
+
+        self._do_login(email, password, workspace_id=workspace_id,
+                       workspace_label=workspace_label, save=save)
+
+    def _do_login(self, email, password, workspace_id=None,
+                  workspace_label=None, save=True):
+        """Perform Arena login in a background thread."""
+        def _login():
+            try:
+                from ..arena_client import ArenaClient, ArenaAPI
+                client = ArenaClient(
+                    base_url=self.config.arena_api_url if self.config else None,
+                    allow_writes=(self.config.sync_direction != "arena_to_kicad"
+                                  if self.config else False),
+                )
+                client.login(email, password, workspace_id)
+
+                if save and self.config:
+                    self.config.arena_email = email
+                    self.config.set_arena_password(password)
+                    self.config.arena_workspace_id = workspace_id or ""
+                    self.config.save()
+
+                arena_api = ArenaAPI(client)
+                wx.CallAfter(self._login_success, client, arena_api, workspace_label)
+            except Exception as e:
+                wx.CallAfter(self._login_failed, str(e))
+
+        threading.Thread(target=_login, daemon=True).start()
+
+    def _login_success(self, client, arena_api, workspace_label=None):
+        self.client = client
+        self.arena_api = arena_api
+        ws = f" ({workspace_label})" if workspace_label else ""
+        self.status_label.SetLabel(f"Connected as {client.user_full_name or 'user'}{ws}")
+        self.status_label.SetForegroundColour(wx.Colour(0, 160, 0))
+        self.connect_btn.Disable()
+        self._on_connected(client, arena_api)
+
+    def _login_failed(self, error):
+        self.status_label.SetLabel(f"Login failed: {error}")
+        self.status_label.SetForegroundColour(wx.RED)
+        self.connect_btn.Enable()
+
+    def _on_change_account(self, event):
+        """Switch to full login form, clear saved credentials."""
+        if self.config:
+            self.config.arena_email = ""
+            self.config.save()
+        self.DestroyChildren()
+        sizer = wx.StaticBoxSizer(wx.VERTICAL, self, "Arena Connection")
+        self._build_full_login(sizer, sizer.GetStaticBox())
+        self.SetSizer(sizer)
+        self.GetParent().Layout()
+
+
+# ---------------------------------------------------------------------------
+# Sync Status Panel
+# ---------------------------------------------------------------------------
+
+class SyncStatusPanel(wx.Panel):
+    """Compact status display showing sync state."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        sizer = wx.StaticBoxSizer(wx.VERTICAL, self, "Library Status")
+        inner = sizer.GetStaticBox()
+
+        grid = wx.FlexGridSizer(cols=4, hgap=15, vgap=4)
+
+        self.lbl_parts = wx.StaticText(inner, label="Parts: --")
+        self.lbl_last_pull = wx.StaticText(inner, label="Last pull: --")
+        self.lbl_dirty = wx.StaticText(inner, label="Pending push: --")
+        self.lbl_conflicts = wx.StaticText(inner, label="Conflicts: --")
+
+        grid.Add(self.lbl_parts, 0)
+        grid.Add(self.lbl_last_pull, 0)
+        grid.Add(self.lbl_dirty, 0)
+        grid.Add(self.lbl_conflicts, 0)
+
+        sizer.Add(grid, 0, wx.ALL | wx.EXPAND, 5)
+        self.SetSizer(sizer)
+
+    def update(self, status, conflict_count=0):
+        self.lbl_parts.SetLabel(f"Parts: {status.get('total_parts', 0)}")
+        last = status.get("last_pull") or "Never"
+        if last != "Never" and len(last) > 19:
+            last = last[:19]  # Trim ISO timestamp
+        self.lbl_last_pull.SetLabel(f"Last pull: {last}")
+        dirty = status.get("dirty_parts", 0)
+        self.lbl_dirty.SetLabel(f"Pending push: {dirty}")
+        self.lbl_conflicts.SetLabel(f"Conflicts: {conflict_count}")
+        if conflict_count > 0:
+            self.lbl_conflicts.SetForegroundColour(wx.RED)
+        else:
+            self.lbl_conflicts.SetForegroundColour(wx.BLACK)
+
+
+# ---------------------------------------------------------------------------
+# Main Sync Dialog
+# ---------------------------------------------------------------------------
+
+class SyncDialog(wx.Dialog):
+    """Main dialog for Arena PLM Library Sync.
+
+    Layout:
+    1. Arena Connection (inline login panel)
+    2. Library Status (compact stats)
+    3. Sync Controls (Pull / Push / Bidirectional tabs)
+    4. Progress + Log
+    5. Bottom buttons (Settings, View Conflicts, Close)
+    """
 
     def __init__(self, parent, sync_client=None, config=None):
         _require_wx()
         super().__init__(parent, title="Arena PLM Library Sync",
-                         size=(800, 600),
+                         size=(700, 650),
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
         self.sync_client = sync_client
         self.config = config
         self._sync_active = False
+        self._arena_api = None
+        self._arena_client = None
 
         self._build_ui()
-        self._refresh_status()
+        self._update_sync_controls_state()
         self.CenterOnScreen()
 
     def _build_ui(self):
         main_sizer = wx.BoxSizer(wx.VERTICAL)
 
-        # Top: two-panel layout
-        top_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        # 1. Arena Connection (inline at top)
+        self.login_panel = ArenaLoginPanel(self, self.config, self._on_connected)
+        main_sizer.Add(self.login_panel, 0, wx.EXPAND | wx.ALL, 5)
 
-        # Left: Status panel
-        status_panel = self._build_status_panel(self)
-        top_sizer.Add(status_panel, 1, wx.EXPAND | wx.ALL, 5)
+        # 2. Library Status
+        self.status_panel = SyncStatusPanel(self)
+        main_sizer.Add(self.status_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
 
-        # Right: Sync controls (notebook with tabs)
+        # 3. Sync Controls
         self.notebook = wx.Notebook(self)
         self._build_pull_tab()
         self._build_push_tab()
         self._build_bidir_tab()
-        top_sizer.Add(self.notebook, 2, wx.EXPAND | wx.ALL, 5)
+        main_sizer.Add(self.notebook, 0, wx.EXPAND | wx.ALL, 5)
 
-        main_sizer.Add(top_sizer, 1, wx.EXPAND)
+        # 4. Progress + Log
+        self.progress = wx.Gauge(self, range=100)
+        self.progress.Hide()
+        main_sizer.Add(self.progress, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
 
-        # Bottom: Progress and log
-        bottom_sizer = self._build_bottom_panel(self)
-        main_sizer.Add(bottom_sizer, 0, wx.EXPAND | wx.ALL, 5)
+        self.log = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL,
+                                size=(-1, 100))
+        self.log.SetFont(wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL,
+                                  wx.FONTWEIGHT_NORMAL))
+        main_sizer.Add(self.log, 1, wx.EXPAND | wx.ALL, 5)
 
-        # Button row
+        # 5. Bottom buttons
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_settings = wx.Button(self, label="Settings")
         self.btn_conflicts = wx.Button(self, label="View Conflicts")
-        self.btn_sync_log = wx.Button(self, label="Sync Log")
         btn_close = wx.Button(self, wx.ID_CLOSE, "Close")
 
         btn_sizer.Add(self.btn_settings, 0, wx.RIGHT, 5)
         btn_sizer.Add(self.btn_conflicts, 0, wx.RIGHT, 5)
-        btn_sizer.Add(self.btn_sync_log, 0, wx.RIGHT, 5)
         btn_sizer.AddStretchSpacer()
         btn_sizer.Add(btn_close, 0)
 
@@ -85,175 +341,96 @@ class SyncDialog(wx.Dialog if wx else object):
         self.btn_conflicts.Bind(wx.EVT_BUTTON, self._on_conflicts)
         btn_close.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CLOSE))
 
-    def _build_status_panel(self, parent):
-        panel = wx.StaticBox(parent, label="Status")
-        sizer = wx.StaticBoxSizer(panel, wx.VERTICAL)
-
-        grid = wx.FlexGridSizer(cols=2, hgap=10, vgap=6)
-        grid.AddGrowableCol(1)
-
-        self.lbl_connection = wx.StaticText(panel, label="--")
-        self.lbl_last_pull = wx.StaticText(panel, label="--")
-        self.lbl_last_push = wx.StaticText(panel, label="--")
-        self.lbl_parts_count = wx.StaticText(panel, label="--")
-        self.lbl_dirty_count = wx.StaticText(panel, label="--")
-        self.lbl_conflict_count = wx.StaticText(panel, label="--")
-        self.lbl_deploy_mode = wx.StaticText(panel, label="--")
-
-        labels = [
-            ("Connection:", self.lbl_connection),
-            ("Last pull:", self.lbl_last_pull),
-            ("Last push:", self.lbl_last_push),
-            ("Parts in library:", self.lbl_parts_count),
-            ("Dirty (pending push):", self.lbl_dirty_count),
-            ("Conflicts:", self.lbl_conflict_count),
-            ("Deployment mode:", self.lbl_deploy_mode),
-        ]
-
-        for label_text, ctrl in labels:
-            grid.Add(wx.StaticText(panel, label=label_text), 0, wx.ALIGN_RIGHT)
-            grid.Add(ctrl, 0, wx.EXPAND)
-
-        sizer.Add(grid, 1, wx.ALL | wx.EXPAND, 8)
-        return sizer
+    # -- Sync tabs ----------------------------------------------------------
 
     def _build_pull_tab(self):
         panel = wx.Panel(self.notebook)
-        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer = wx.BoxSizer(wx.HORIZONTAL)
 
-        sizer.Add(wx.StaticText(panel, label="Pull from Arena"), 0,
-                   wx.ALL, 10)
-
-        # Mode selection
         mode_sizer = wx.BoxSizer(wx.HORIZONTAL)
         mode_sizer.Add(wx.StaticText(panel, label="Mode:"), 0,
                        wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
         self.pull_mode = wx.Choice(panel, choices=["Delta (changes only)", "Full (all items)"])
         self.pull_mode.SetSelection(0)
-        mode_sizer.Add(self.pull_mode, 0)
-        sizer.Add(mode_sizer, 0, wx.LEFT | wx.BOTTOM, 10)
+        mode_sizer.Add(self.pull_mode, 0, wx.RIGHT, 15)
 
-        self.btn_pull = wx.Button(panel, label="Pull Now")
+        self.btn_pull = wx.Button(panel, label="Pull from Arena")
         self.btn_pull.Bind(wx.EVT_BUTTON, self._on_pull)
-        sizer.Add(self.btn_pull, 0, wx.ALL, 10)
+        mode_sizer.Add(self.btn_pull, 0)
 
+        sizer.Add(mode_sizer, 0, wx.ALL, 10)
         panel.SetSizer(sizer)
-        self.notebook.AddPage(panel, "<- Pull from Arena")
+        self.notebook.AddPage(panel, "Pull from Arena")
 
     def _build_push_tab(self):
         panel = wx.Panel(self.notebook)
-        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer = wx.BoxSizer(wx.HORIZONTAL)
 
-        sizer.Add(wx.StaticText(panel, label="Push to Arena"), 0,
-                   wx.ALL, 10)
-
-        # Source selection
-        src_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        src_sizer.Add(wx.StaticText(panel, label="Source:"), 0,
-                      wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-        self.push_source = wx.Choice(panel, choices=["Dirty parts", "Schematic file"])
-        self.push_source.SetSelection(0)
-        src_sizer.Add(self.push_source, 0, wx.RIGHT, 10)
-
-        self.btn_browse_sch = wx.Button(panel, label="Browse...")
-        self.btn_browse_sch.Enable(False)
-        src_sizer.Add(self.btn_browse_sch, 0)
-        sizer.Add(src_sizer, 0, wx.LEFT | wx.BOTTOM, 10)
-
-        self.push_source.Bind(wx.EVT_CHOICE, lambda e: self.btn_browse_sch.Enable(
-            self.push_source.GetSelection() == 1))
-
-        self.lbl_sch_path = wx.StaticText(panel, label="")
-        sizer.Add(self.lbl_sch_path, 0, wx.LEFT, 10)
-
-        self.btn_push = wx.Button(panel, label="Push Now")
+        self.btn_push = wx.Button(panel, label="Push Dirty Parts to Arena")
         self.btn_push.Bind(wx.EVT_BUTTON, self._on_push)
         sizer.Add(self.btn_push, 0, wx.ALL, 10)
 
-        self.btn_browse_sch.Bind(wx.EVT_BUTTON, self._on_browse_sch)
-
         panel.SetSizer(sizer)
-        self.notebook.AddPage(panel, "-> Push to Arena")
+        self.notebook.AddPage(panel, "Push to Arena")
 
     def _build_bidir_tab(self):
         panel = wx.Panel(self.notebook)
-        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer = wx.BoxSizer(wx.HORIZONTAL)
 
-        sizer.Add(wx.StaticText(panel, label="Bidirectional Sync"), 0,
-                   wx.ALL, 10)
-
-        # Order
-        order_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        order_sizer.Add(wx.StaticText(panel, label="Order:"), 0,
-                        wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-        self.bidir_order = wx.Choice(panel, choices=["Pull first", "Push first"])
-        self.bidir_order.SetSelection(0)
-        order_sizer.Add(self.bidir_order, 0)
-        sizer.Add(order_sizer, 0, wx.LEFT | wx.BOTTOM, 10)
-
-        # Conflict strategy
         strat_sizer = wx.BoxSizer(wx.HORIZONTAL)
         strat_sizer.Add(wx.StaticText(panel, label="Conflicts:"), 0,
                         wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
         self.bidir_strategy = wx.Choice(panel,
                                          choices=["Prompt user", "Arena wins", "KiCad wins"])
         self.bidir_strategy.SetSelection(0)
-        strat_sizer.Add(self.bidir_strategy, 0)
-        sizer.Add(strat_sizer, 0, wx.LEFT | wx.BOTTOM, 10)
+        strat_sizer.Add(self.bidir_strategy, 0, wx.RIGHT, 15)
 
         self.btn_bidir = wx.Button(panel, label="Sync Now")
         self.btn_bidir.Bind(wx.EVT_BUTTON, self._on_bidirectional)
-        sizer.Add(self.btn_bidir, 0, wx.ALL, 10)
+        strat_sizer.Add(self.btn_bidir, 0)
 
+        sizer.Add(strat_sizer, 0, wx.ALL, 10)
         panel.SetSizer(sizer)
-        self.notebook.AddPage(panel, "<-> Bidirectional")
+        self.notebook.AddPage(panel, "Bidirectional")
 
-    def _build_bottom_panel(self, parent):
-        sizer = wx.BoxSizer(wx.VERTICAL)
+    # -- Connection callback ------------------------------------------------
 
-        self.progress = wx.Gauge(parent, range=100)
-        self.progress.Hide()
-        sizer.Add(self.progress, 0, wx.EXPAND | wx.BOTTOM, 5)
+    def _on_connected(self, client, arena_api):
+        """Called by ArenaLoginPanel on successful login."""
+        self._arena_client = client
+        self._arena_api = arena_api
 
-        self.log = wx.TextCtrl(parent, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL,
-                                size=(-1, 120))
-        self.log.SetFont(wx.Font(10, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL,
-                                  wx.FONTWEIGHT_NORMAL))
-        sizer.Add(self.log, 0, wx.EXPAND)
+        # Build sync client
+        from ..kicad_db import KiCadLibraryDB
+        from ..sync_engine import SyncEngine, LocalSyncClient
 
-        return sizer
+        db_path = self.config.db_path if self.config else "/tmp/arena_library.db"
+        db = KiCadLibraryDB(db_path).connect()
 
-    # -- Status refresh -----------------------------------------------------
+        engine = SyncEngine(arena_api, db, self.config)
+        self.sync_client = LocalSyncClient(engine)
+
+        self._update_sync_controls_state()
+        self._refresh_status()
+        self._log_message("Connected to Arena. Ready to sync.")
+
+    def _update_sync_controls_state(self):
+        """Enable/disable sync controls based on connection state."""
+        connected = self.sync_client is not None
+        self.btn_pull.Enable(connected)
+        self.btn_push.Enable(connected)
+        self.btn_bidir.Enable(connected)
+        self.btn_conflicts.Enable(connected)
 
     def _refresh_status(self):
-        if self.config:
-            self.lbl_deploy_mode.SetLabel(self.config.deployment_mode.title())
-
         if not self.sync_client:
-            self.lbl_connection.SetLabel("Not connected")
-            self.lbl_connection.SetForegroundColour(wx.RED)
             return
-
         try:
             status = self.sync_client.get_status()
-            self.lbl_connection.SetLabel("Connected")
-            self.lbl_connection.SetForegroundColour(wx.Colour(0, 150, 0))
-            self.lbl_last_pull.SetLabel(status.get("last_pull") or "Never")
-            self.lbl_last_push.SetLabel(status.get("last_push") or "Never")
-            self.lbl_parts_count.SetLabel(str(status.get("total_parts", 0)))
-            self.lbl_dirty_count.SetLabel(str(status.get("dirty_parts", 0)))
-
             conflicts = self.sync_client.get_conflicts()
-            count = len(conflicts)
-            self.lbl_conflict_count.SetLabel(str(count))
-            if count > 0:
-                self.lbl_conflict_count.SetForegroundColour(wx.RED)
-            else:
-                self.lbl_conflict_count.SetForegroundColour(wx.BLACK)
-
+            self.status_panel.update(status, len(conflicts))
         except Exception as e:
-            self.lbl_connection.SetLabel(f"Error: {e}")
-            self.lbl_connection.SetForegroundColour(wx.RED)
+            logger.debug("Status refresh failed: %s", e)
 
     # -- Sync operations ----------------------------------------------------
 
@@ -269,7 +446,7 @@ class SyncDialog(wx.Dialog if wx else object):
             self.progress.Hide()
         self.Layout()
 
-    def _log_message(self, msg, color=None):
+    def _log_message(self, msg):
         """Thread-safe log append."""
         def _append():
             self.log.AppendText(msg + "\n")
@@ -288,14 +465,11 @@ class SyncDialog(wx.Dialog if wx else object):
 
     def _on_pull(self, event):
         if not self.sync_client:
-            wx.MessageBox("Not connected. Configure settings first.",
-                          "Arena Sync", wx.OK | wx.ICON_WARNING)
             return
 
         mode = "full" if self.pull_mode.GetSelection() == 1 else "delta"
         self._set_sync_active(True)
         self._log_message(f"Starting {mode} pull from Arena...")
-
         self.sync_client.subscribe_progress(self._progress_callback)
 
         def _do_pull():
@@ -320,7 +494,6 @@ class SyncDialog(wx.Dialog if wx else object):
 
     def _on_push(self, event):
         if not self.sync_client:
-            wx.MessageBox("Not connected.", "Arena Sync", wx.OK | wx.ICON_WARNING)
             return
 
         self._set_sync_active(True)
@@ -345,13 +518,10 @@ class SyncDialog(wx.Dialog if wx else object):
         if result.errors:
             for err in result.errors[:5]:
                 self._log_message(f"  ERROR: {err}")
-        if result.conflicts:
-            self._log_message("  Open 'View Conflicts' to resolve")
         self._refresh_status()
 
     def _on_bidirectional(self, event):
         if not self.sync_client:
-            wx.MessageBox("Not connected.", "Arena Sync", wx.OK | wx.ICON_WARNING)
             return
 
         self._set_sync_active(True)
@@ -373,9 +543,9 @@ class SyncDialog(wx.Dialog if wx else object):
             pull = result.get("pull", {})
             push = result.get("push", {})
             self._log_message(
-                f"Bidirectional sync complete: "
-                f"Pull: +{getattr(pull, 'added', 0)} ~{getattr(pull, 'updated', 0)} | "
-                f"Push: +{getattr(push, 'created', 0)} ~{getattr(push, 'updated', 0)}"
+                f"Sync complete: "
+                f"Pull +{getattr(pull, 'added', 0)} ~{getattr(pull, 'updated', 0)} | "
+                f"Push +{getattr(push, 'created', 0)} ~{getattr(push, 'updated', 0)}"
             )
         self._refresh_status()
 
@@ -384,14 +554,6 @@ class SyncDialog(wx.Dialog if wx else object):
         self._log_message(f"ERROR: {msg}")
 
     # -- Navigation ---------------------------------------------------------
-
-    def _on_browse_sch(self, event):
-        dlg = wx.FileDialog(self, "Select KiCad Schematic",
-                             wildcard="KiCad Schematic (*.kicad_sch)|*.kicad_sch",
-                             style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
-        if dlg.ShowModal() == wx.ID_OK:
-            self.lbl_sch_path.SetLabel(dlg.GetPath())
-        dlg.Destroy()
 
     def _on_settings(self, event):
         from .settings_dialog import SettingsDialog
@@ -403,7 +565,6 @@ class SyncDialog(wx.Dialog if wx else object):
 
     def _on_conflicts(self, event):
         if not self.sync_client:
-            wx.MessageBox("Not connected.", "Arena Sync", wx.OK | wx.ICON_WARNING)
             return
         from .conflict_dialog import ConflictDialog
         conflicts = self.sync_client.get_conflicts()
