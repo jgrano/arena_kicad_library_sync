@@ -34,6 +34,8 @@ FORBIDDEN_WRITE_FIELDS = frozenset({
 LIFECYCLE_MAP = {
     "DESIGN": "Development",
     "Design": "Development",
+    "PRELIMINARY": "NPI",
+    "Preliminary": "NPI",
     "PRODUCTION": "Active",
     "Production": "Active",
     "OBSOLETE": "Obsolete",
@@ -758,6 +760,9 @@ class ArenaAPI:
         for arena_field, kicad_field in field_mappings.items():
             value = _extract_nested(raw_item, arena_field)
             if value:
+                # Arena often returns dicts with {guid, name} — extract name
+                if isinstance(value, dict):
+                    value = value.get("name", str(value))
                 custom[kicad_field] = str(value)
 
         return KiCadPart(
