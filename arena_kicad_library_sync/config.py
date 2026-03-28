@@ -63,6 +63,26 @@ DEFAULT_CONFIG = {
             "Datasheet": "customAttributes.datasheet",
         },
     },
+    "category_defaults": {
+        "Resistor": {"symbol": "Device:R", "footprint": "Resistor_SMD:R_0402_1005Metric"},
+        "Capacitor": {"symbol": "Device:C", "footprint": "Capacitor_SMD:C_0402_1005Metric"},
+        "Inductor": {"symbol": "Device:L", "footprint": "Inductor_SMD:L_0402_1005Metric"},
+        "Ferrite Bead": {"symbol": "Device:FerriteBead", "footprint": "Inductor_SMD:L_0402_1005Metric"},
+        "Thermistors": {"symbol": "Device:Thermistor_NTC", "footprint": "Resistor_SMD:R_0402_1005Metric"},
+        "Diode": {"symbol": "Device:D", "footprint": "Diode_SMD:D_SOD-323"},
+        "Zener Diode": {"symbol": "Device:D_Zener", "footprint": "Diode_SMD:D_SOD-323"},
+        "LED": {"symbol": "Device:LED", "footprint": "LED_SMD:LED_0603_1608Metric"},
+        "Transistor - MOSFET": {"symbol": "Device:Q_NMOS_GSD", "footprint": "Package_TO_SOT_SMD:SOT-23"},
+        "Transistor - BJT": {"symbol": "Device:Q_NPN_BEC", "footprint": "Package_TO_SOT_SMD:SOT-23"},
+        "Integrated Circuit": {"symbol": "", "footprint": ""},
+        "Operational Amplifier": {"symbol": "Amplifier_Operational:LM321", "footprint": "Package_TO_SOT_SMD:SOT-23-5"},
+        "Voltage Regulator": {"symbol": "Regulator_Linear:AP2112K-3.3", "footprint": "Package_TO_SOT_SMD:SOT-23-5"},
+        "Crystal": {"symbol": "Device:Crystal", "footprint": "Crystal:Crystal_SMD_3215-2Pin_3.2x1.5mm"},
+        "Connector": {"symbol": "", "footprint": ""},
+        "Transformer": {"symbol": "Device:Transformer_1P_1S", "footprint": ""},
+        "Fuse": {"symbol": "Device:Fuse", "footprint": "Fuse:Fuse_0603_1608Metric"},
+        "Test Point": {"symbol": "Connector:TestPoint", "footprint": "TestPoint:TestPoint_Pad_D1.0mm"},
+    },
     "kicad_library_path": "",
     "kicad_projects_root": "",
 }
@@ -345,6 +365,53 @@ class Config:
         """
         a2k = self._data["field_mappings"].get("arena_to_kicad", {})
         return {v: k for k, v in a2k.items()}
+
+    # -- Category defaults --------------------------------------------------
+
+    def get_category_defaults(self) -> dict[str, dict[str, str]]:
+        """Get the category-to-symbol/footprint default mapping.
+
+        Returns dict like:
+            {"Resistor": {"symbol": "Device:R", "footprint": "R_0402..."}, ...}
+        """
+        return dict(self._data.get("category_defaults", {}))
+
+    def get_symbol_for_category(self, category: str) -> str:
+        """Look up default KiCad symbol for an Arena category.
+
+        Tries exact match first, then substring match (e.g. "Resistor"
+        matches "Resistor" category and also "Thick Film Resistor").
+        """
+        defaults = self._data.get("category_defaults", {})
+
+        # Exact match
+        if category in defaults:
+            return defaults[category].get("symbol", "")
+
+        # Substring match — check if any default key is contained in the category
+        category_lower = category.lower()
+        for key, mapping in defaults.items():
+            if key.lower() in category_lower:
+                return mapping.get("symbol", "")
+
+        return ""
+
+    def get_footprint_for_category(self, category: str) -> str:
+        """Look up default KiCad footprint for an Arena category.
+
+        Same matching logic as get_symbol_for_category.
+        """
+        defaults = self._data.get("category_defaults", {})
+
+        if category in defaults:
+            return defaults[category].get("footprint", "")
+
+        category_lower = category.lower()
+        for key, mapping in defaults.items():
+            if key.lower() in category_lower:
+                return mapping.get("footprint", "")
+
+        return ""
 
     # -- Convenience accessors ----------------------------------------------
 

@@ -730,11 +730,19 @@ class ArenaAPI:
     # -- Field normalization ------------------------------------------------
 
     def normalize_item(self, raw_item: dict,
-                       field_mappings: dict[str, str]) -> KiCadPart:
+                       field_mappings: dict[str, str],
+                       category_defaults: Optional[dict] = None) -> KiCadPart:
         """Normalize a raw Arena item into a KiCadPart.
 
         Flattens nested Arena fields, maps lifecycle phases,
-        and applies field mappings.
+        applies field mappings, and fills in symbol/footprint from
+        category defaults when not set in Arena.
+
+        Args:
+            raw_item: Raw Arena API item dict
+            field_mappings: Arena field -> KiCad field name mapping
+            category_defaults: Optional dict of category -> {symbol, footprint}
+                             defaults to apply when Arena item has no symbol/footprint
         """
         # Extract core fields
         guid = raw_item.get("guid", "")
@@ -757,6 +765,26 @@ class ArenaAPI:
         # Last modified
         last_modified = raw_item.get("modifiedDateTime", raw_item.get("lastModifiedDateTime"))
 
+        # Symbol/footprint from Arena custom attributes
+        kicad_symbol = ""
+        kicad_footprint = ""
+        for attr in raw_item.get("additionalAttributes", []):
+            api_name = attr.get("apiName", "")
+            val = attr.get("value", "")
+            if api_name == "kicad_symbol" and val:
+                kicad_symbol = val
+            elif api_name == "kicad_footprint" and val:
+                kicad_footprint = val
+
+        # Apply category defaults if symbol/footprint not set in Arena
+        if category_defaults and category:
+            if not kicad_symbol:
+                kicad_symbol = _lookup_category_default(
+                    category, category_defaults, "symbol")
+            if not kicad_footprint:
+                kicad_footprint = _lookup_category_default(
+                    category, category_defaults, "footprint")
+
         # Build custom fields from field mappings
         custom = {}
         for arena_field, kicad_field in field_mappings.items():
@@ -774,6 +802,8 @@ class ArenaAPI:
             category=category,
             revision=revision,
             lifecycle=lifecycle,
+            kicad_symbol=kicad_symbol,
+            kicad_footprint=kicad_footprint,
             last_modified_arena=last_modified,
             custom_fields=custom,
         )
@@ -883,6 +913,26 @@ def detect_conflict(arena_item: dict, local_item: dict,
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _lookup_category_default(category: str, defaults: dict,
+                             field: str) -> str:
+    """Look up a default symbol or footprint for a category.
+
+    Tries exact match first, then substring match (e.g. "Resistor"
+    matches Arena category "Thick Film Resistor").
+    """
+    # Exact match
+    if category in defaults:
+        return defaults[category].get(field, "")
+
+    # Substring match
+    category_lower = category.lower()
+    for key, mapping in defaults.items():
+        if key.lower() in category_lower:
+            return mapping.get(field, "")
+
+    return ""
+
 
 def _extract_nested(obj: dict, dotted_key: str) -> Any:
     """Extract a value from a nested dict using dot notation.

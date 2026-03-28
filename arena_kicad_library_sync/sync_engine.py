@@ -69,6 +69,7 @@ class SyncEngine:
         start = time.time()
         result = PullResult()
         field_map = self.config.get_field_map("arena_to_kicad")
+        cat_defaults = self.config.get_category_defaults()
 
         try:
             # Paginate through all items
@@ -85,7 +86,7 @@ class SyncEngine:
 
                 for i, raw_item in enumerate(items):
                     try:
-                        part = self.arena.normalize_item(raw_item, field_map)
+                        part = self.arena.normalize_item(raw_item, field_map, cat_defaults)
                         part = self.arena.enrich_with_sourcing(part)
                         guid = part.arena_guid
                         all_guids.add(guid)
@@ -140,6 +141,7 @@ class SyncEngine:
         start = time.time()
         result = PullResult()
         field_map = self.config.get_field_map("arena_to_kicad")
+        cat_defaults = self.config.get_category_defaults()
 
         last_sync = self.db.get_last_sync_time("arena_to_kicad")
         if not last_sync:
@@ -153,7 +155,7 @@ class SyncEngine:
 
             for i, raw_item in enumerate(modified_items):
                 try:
-                    part = self.arena.normalize_item(raw_item, field_map)
+                    part = self.arena.normalize_item(raw_item, field_map, cat_defaults)
                     part = self.arena.enrich_with_sourcing(part)
                     guid = part.arena_guid
 
